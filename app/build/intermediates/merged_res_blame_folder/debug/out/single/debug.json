@@ -1,0 +1,10 @@
+[
+    {
+        "merged": "com.dragon.rokidclaw.app-merged_res-20:/layout_activity_main.xml.flat",
+        "source": "com.dragon.rokidclaw.app-main-22:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.dragon.rokidclaw.app-merged_res-20:/drawable_circle_button.xml.flat",
+        "source": "com.dragon.rokidclaw.app-main-22:/drawable/circle_button.xml"
+    }
+]
