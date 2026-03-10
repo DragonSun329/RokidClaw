@@ -17,10 +17,6 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import java.util.Locale
 
-/**
- * Rokid OpenClaw — Voice assistant on AR glasses.
- * Tap → record → Groq Whisper STT (on PC) → OpenClaw → TTS reply
- */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var audioRecorder: AudioRecorder
@@ -40,38 +36,27 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Keep screen on while app is open
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
         setContentView(R.layout.activity_main)
 
-        statusText = findViewById(R.id.status_text)
-        inputText = findViewById(R.id.input_text)
+        statusText   = findViewById(R.id.status_text)
+        inputText    = findViewById(R.id.input_text)
         responseText = findViewById(R.id.response_text)
 
-        openClawClient = OpenClawClient(BuildConfig.OPENCLAW_GATEWAY_URL)
-        audioRecorder = AudioRecorder(this)
+        openClawClient = OpenClawClient()   // uses BuildConfig.MAC_MINI_IP
+        audioRecorder  = AudioRecorder(this)
 
-        // Init TTS - try Chinese first, fallback to English
+        // TTS: 中文优先，fallback English
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val zhResult = tts?.setLanguage(Locale.CHINESE)
-                if (zhResult == TextToSpeech.LANG_MISSING_DATA || zhResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    Log.w(TAG, "Chinese TTS not available, trying English")
-                    val enResult = tts?.setLanguage(Locale.US)
-                    if (enResult == TextToSpeech.LANG_MISSING_DATA || enResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        Log.e(TAG, "No TTS language available")
-                        ttsReady = false
-                        return@TextToSpeech
+                val zh = tts?.setLanguage(Locale.CHINESE)
+                ttsReady = zh != TextToSpeech.LANG_MISSING_DATA && zh != TextToSpeech.LANG_NOT_SUPPORTED
+                if (!ttsReady) {
+                    ttsReady = tts?.setLanguage(Locale.US).let {
+                        it != TextToSpeech.LANG_MISSING_DATA && it != TextToSpeech.LANG_NOT_SUPPORTED
                     }
                 }
-                ttsReady = true
-                // Check available engines
-                val engines = tts?.engines
-                Log.d(TAG, "TTS ready. Engines: ${engines?.map { it.label }}")
-            } else {
-                Log.e(TAG, "TTS init failed with status $status")
+                Log.d(TAG, "TTS ready=$ttsReady")
             }
         }
 
@@ -81,51 +66,35 @@ class MainActivity : AppCompatActivity() {
             == PackageManager.PERMISSION_GRANTED) {
             checkConnection()
         } else {
-            ActivityCompat.requestPermissions(
-                this, arrayOf(Manifest.permission.RECORD_AUDIO), 100
-            )
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 100)
         }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 100 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            checkConnection()
-        } else {
-            statusText.text = "❌ Need mic permission"
-        }
+        if (requestCode == 100 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) checkConnection()
+        else statusText.text = "❌ Need mic permission"
     }
 
     private fun checkConnection() {
         scope.launch {
             val ok = openClawClient.ping()
-            statusText.text = if (ok) {
-                "⚡ Mia Ready\nTap to talk"
-            } else {
-                "⚠️ Cannot reach Mia\nTap to retry"
-            }
+            statusText.text = if (ok) "⚡ Mia Ready\nTap to talk" else "⚠️ No connection\nCheck WiFi"
         }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         return when (keyCode) {
             KeyEvent.KEYCODE_ENTER -> {
-                if (isProcessing) return true
-                if (isRecording) stopAndSend() else startRecording()
+                if (!isProcessing) { if (isRecording) stopAndSend() else startRecording() }
                 true
             }
             KeyEvent.KEYCODE_BACK -> {
                 if (isRecording) {
-                    // Cancel recording
                     isRecording = false
                     audioRecorder.stopRecording()
                     statusText.text = "⚡ Mia Ready\nTap to talk"
-                } else {
-                    // Move to back, don't destroy
-                    moveTaskToBack(true)
-                }
+                } else moveTaskToBack(true)
                 true
             }
             else -> super.onKeyDown(keyCode, event)
@@ -134,12 +103,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun startRecording() {
         if (isRecording || isProcessing) return
-        val started = audioRecorder.startRecording()
-        if (started) {
+        if (audioRecorder.startRecording()) {
             isRecording = true
-            statusText.text = "🎤 Recording...\nTap to send"
+            statusText.text = "🎤 Listening...\nTap to send"
             inputText.text = ""
             responseText.text = ""
+            // 自动停止 15s
             handler.postDelayed({ if (isRecording) stopAndSend() }, 15000)
         } else {
             statusText.text = "❌ Mic error\nTap to retry"
@@ -152,23 +121,22 @@ class MainActivity : AppCompatActivity() {
         isProcessing = true
         handler.removeCallbacksAndMessages(null)
         statusText.text = "🧠 Thinking..."
+        inputText.text = "Transcribing..."
 
         scope.launch {
             val wavBytes = withContext(Dispatchers.IO) { audioRecorder.stopRecording() }
 
             if (wavBytes == null || wavBytes.size < 1000) {
                 statusText.text = "⚠️ Too short\nTap to retry"
+                inputText.text = ""
                 isProcessing = false
                 return@launch
             }
 
-            inputText.text = "🎤 Transcribing..."
+            val result = openClawClient.processAudio(wavBytes)
 
-            val result = openClawClient.sendAudio(wavBytes)
-
-            result.onSuccess { reply ->
-                // Show transcription if available
-                inputText.text = ""
+            result.onSuccess { (transcript, reply) ->
+                inputText.text = "🎤 $transcript"
                 responseText.text = reply
 
                 if (ttsReady && reply.isNotEmpty()) {
@@ -185,9 +153,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            result.onFailure { error ->
-                responseText.text = error.message?.take(100) ?: "Unknown error"
-                statusText.text = "❌ Error\nTap to retry"
+            result.onFailure { err ->
+                val msg = err.message ?: "Unknown error"
+                Log.e(TAG, "Error: $msg", err)
+                responseText.text = "❌ $msg"
+                inputText.text = ""
+                statusText.text = "⚠️ Error\nTap to retry"
                 isProcessing = false
             }
         }
@@ -210,7 +181,5 @@ class MainActivity : AppCompatActivity() {
         handler.removeCallbacksAndMessages(null)
     }
 
-    companion object {
-        private const val TAG = "RokidOpenClaw"
-    }
+    companion object { private const val TAG = "RokidMia" }
 }

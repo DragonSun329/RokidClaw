@@ -15,8 +15,7 @@ android {
         versionName = "0.1.0"
 
         // OpenClaw Gateway URL - change to your actual gateway address
-        buildConfigField("String", "OPENCLAW_GATEWAY_URL", "\"http://127.0.0.1:3771\"")
-        buildConfigField("String", "OPENCLAW_TOKEN", "\"\"") // Set via local.properties
+        buildConfigField("String", "MAC_MINI_IP", "\"192.168.18.81\"")
     }
 
     buildTypes {
@@ -53,6 +52,7 @@ dependencies {
 
     // JSON
     implementation("com.google.code.gson:gson:2.10.1")
+    implementation("org.json:json:20231013")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
